@@ -12,7 +12,7 @@ const firebaseConfig = {
   };
 
 // URL of the Cloudflare Worker from /functions/worker.js (README explains deploying it).
-const WORKER_URL = "https://backlot-worker.YOUR-SUBDOMAIN.workers.dev/generate-reply";
+const WORKER_URL = "https://backlot-worker.backlotsocial.workers.dev/generate-reply";
 
 // Seed cast, used only the very first time the `characters` collection is empty.
 const SEED_CHARACTERS = [
