@@ -3,9 +3,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Posts and character replies live in one flat collection.
-    // parentId == null   -> top-level post
-    // parentId == <id>   -> a threaded reply to that post (can itself be replied to)
     match /posts/{postId} {
       allow read: if true;
 
@@ -20,28 +17,35 @@ service cloud.firestore {
         && (request.resource.data.parentId == null || request.resource.data.parentId is string)
         && request.resource.data.createdAt == request.time;
 
-      // No edits or deletes from the client — keeps the feed an honest log.
       allow update, delete: if false;
     }
 
-    // Character roster. Public read so the cast rail works signed-out.
-    // NOTE: any signed-in user can create/edit a character (needed so the app
-    // can self-seed on first run). Tighten this once you've seeded your cast.
     match /characters/{characterId} {
       allow read: if true;
       allow write: if request.auth != null;
     }
 
-    // One doc per signed-in user, used to resolve @handles for mentions.
-    // No profile pages read this — it's purely a handle -> uid lookup.
+    // One doc per signed-in user: identity (name/handle), used to resolve
+    // @mentions and to render profile pages. Not a general-purpose profile
+    // system — just enough to mirror old Twitter's name vs @handle split.
     match /users/{uid} {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == uid;
+
+      // First-time creation, done by the app right after sign-in.
+      allow create: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasAll(['displayName', 'handle', 'createdAt', 'lastNameChangeAt'])
+        && isValidHandle(request.resource.data.handle)
+        && request.resource.data.lastNameChangeAt == request.time;
+
+      allow update: if request.auth != null && request.auth.uid == uid && isValidUserUpdate();
+
+      allow delete: if false;
     }
 
-    // Notifications: "X replied to you" / "X mentioned you".
-    // Written by whoever performed the action, addressed to the recipient —
-    // that's why create isn't restricted to auth.uid == toUserId.
+    // "X replied to you" / "X mentioned you". Written by whoever performed
+    // the action, addressed to the recipient — so create isn't restricted
+    // to auth.uid == toUserId.
     match /notifications/{notifId} {
       allow read: if request.auth != null && request.auth.uid == resource.data.toUserId;
 
@@ -61,6 +65,29 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
 
       allow delete: if false;
+    }
+
+    function isValidHandle(handle) {
+      return handle is string && handle.size() >= 2 && handle.size() <= 20
+        && handle.matches('^[a-z0-9_]+$');
+    }
+
+    // Photo can be refreshed freely on every sign-in. Changing displayName
+    // or handle is only allowed once every 7 days, timestamped by the write
+    // itself (lastNameChangeAt must equal request.time on an identity change).
+    function isValidUserUpdate() {
+      let changedKeys = request.resource.data.diff(resource.data).affectedKeys();
+      let identityChanged = changedKeys.hasAny(['displayName', 'handle']);
+      let cooldownOk = !('lastNameChangeAt' in resource.data)
+        || resource.data.lastNameChangeAt == null
+        || request.time.toMillis() > resource.data.lastNameChangeAt.toMillis() + 604800000;
+
+      return changedKeys.hasOnly(['displayName', 'handle', 'photoURL', 'createdAt', 'lastNameChangeAt'])
+        && isValidHandle(request.resource.data.handle)
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        && request.resource.data.displayName.size() <= 40
+        && (!identityChanged || (request.resource.data.lastNameChangeAt == request.time && cooldownOk));
     }
   }
 }

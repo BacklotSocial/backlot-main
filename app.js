@@ -3,18 +3,17 @@
 // ============================================================
 
 const firebaseConfig = {
-    apiKey: "AIzaSyBDtgv6RsdcSr4Kh3Gc91qNt7iw-n4vkkg",
-    authDomain: "backlot-297a9.firebaseapp.com",
-    projectId: "backlot-297a9",
-    storageBucket: "backlot-297a9.firebasestorage.app",
-    messagingSenderId: "974601219948",
-    appId: "1:974601219948:web:51b89ac66b79618c248d49"
-  };
+  apiKey: "YOUR_FIREBASE_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID",
+};
 
-// URL of the Cloudflare Worker from /functions/worker.js (README explains deploying it).
-const WORKER_URL = "https://backlot-worker.backlotsocial.workers.dev/generate-reply";
+const WORKER_URL = "https://backlot-worker.YOUR-SUBDOMAIN.workers.dev/generate-reply";
 
-// Seed cast, used only the very first time the `characters` collection is empty.
+// Seed cast. `id` doubles as the character's handle (@mara, @juno, @walt).
 const SEED_CHARACTERS = [
   {
     id: "mara",
@@ -45,14 +44,13 @@ const SEED_CHARACTERS = [
   },
 ];
 
-// Client-side content guardrails (a real gate still lives in Firestore rules + the Worker).
 const MAX_POST_LENGTH = 500;
 const POST_COOLDOWN_MS = 15000; // 15s between posts, per browser
-const BANNED_WORDS = [
-  // add terms you want to block client-side before anything reaches the network
-];
+const BANNED_WORDS = [];
 const MAX_CHARACTER_REPLIES_PER_POST = 2;
 const MAX_TOP_LEVEL_POSTS = 50;
+const IDENTITY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const HANDLE_PATTERN = /^[a-z0-9_]{2,20}$/;
 
 // ============================================================
 // Firebase setup
@@ -72,8 +70,8 @@ import {
   addDoc,
   doc,
   setDoc,
-  getDoc,
   updateDoc,
+  getDoc,
   getDocs,
   query,
   where,
@@ -106,11 +104,23 @@ const notifBadge = document.getElementById("notifBadge");
 const notifPanel = document.getElementById("notifPanel");
 const notifList = document.getElementById("notifList");
 const notifEmpty = document.getElementById("notifEmpty");
+const mainLayout = document.getElementById("mainLayout");
+const profileView = document.getElementById("profileView");
+const profileHeader = document.getElementById("profileHeader");
+const profilePosts = document.getElementById("profilePosts");
+const profileEmpty = document.getElementById("profileEmpty");
+const profileBack = document.getElementById("profileBack");
+const modalRoot = document.getElementById("modalRoot");
+const wordmarkLink = document.getElementById("wordmarkLink");
 
 let currentUser = null;
-let characters = []; // from Firestore
-let usersByHandle = new Map(); // handle -> { uid, displayName }
+let currentUserDoc = null; // { handle, displayName, createdAt, lastNameChangeAt, ... }
+let characters = [];
+let usersByHandle = new Map(); // handle -> { uid, displayName, ...doc }
+let usersByUid = new Map(); // uid -> { handle, displayName, ...doc }
 const postElements = new Map(); // postId -> { el, childrenEl, data }
+let profilePostsUnsub = null;
+let currentProfileHandle = null;
 
 // ============================================================
 // Auth
@@ -125,13 +135,21 @@ function renderAuthArea() {
     img.src = currentUser.photoURL || "";
     img.alt = "";
     const name = document.createElement("span");
+    name.className = "chip-name";
     name.textContent = currentUser.displayName || currentUser.email || "Signed in";
+    name.onclick = () => {
+      const mine = usersByUid.get(currentUser.uid);
+      if (mine) navigateToProfile(mine.handle);
+    };
+    const handleSpan = document.createElement("span");
+    handleSpan.className = "chip-handle";
     const out = document.createElement("button");
     out.className = "btn-text";
     out.textContent = "Sign out";
     out.onclick = () => signOut(auth);
-    chip.append(img, name, out);
+    chip.append(img, name, handleSpan, out);
     authArea.appendChild(chip);
+    updateChipHandle();
   } else {
     const btn = document.createElement("button");
     btn.className = "btn btn-ghost";
@@ -139,6 +157,13 @@ function renderAuthArea() {
     btn.onclick = doSignIn;
     authArea.appendChild(btn);
   }
+}
+
+function updateChipHandle() {
+  const span = document.querySelector(".chip-handle");
+  if (!span || !currentUser) return;
+  const mine = usersByUid.get(currentUser.uid);
+  span.textContent = mine ? `@${mine.handle}` : "";
 }
 
 function doSignIn() {
@@ -166,29 +191,45 @@ onAuthStateChanged(auth, async (user) => {
 
 function slugifyHandle(name, uid) {
   const base = (name || "").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 20);
-  return base || `user${uid.slice(0, 6)}`;
+  return base.length >= 2 ? base : `user${uid.slice(0, 6)}`;
 }
 
 async function ensureUserDoc(user) {
-  const handle = slugifyHandle(user.displayName, user.uid);
-  await setDoc(
-    doc(db, "users", user.uid),
-    {
+  const ref = doc(db, "users", user.uid);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    await setDoc(ref, {
       displayName: user.displayName || "Anonymous",
-      handle,
+      handle: slugifyHandle(user.displayName, user.uid),
       photoURL: user.photoURL || null,
-    },
-    { merge: true }
-  );
+      createdAt: serverTimestamp(),
+      lastNameChangeAt: serverTimestamp(),
+    });
+  } else {
+    const data = snap.data();
+    const patch = { photoURL: user.photoURL || null };
+    if (!data.createdAt) patch.createdAt = serverTimestamp(); // backfill for pre-existing accounts
+    await setDoc(ref, patch, { merge: true });
+  }
 }
 
 onSnapshot(collection(db, "users"), (snap) => {
-  const next = new Map();
+  const byHandle = new Map();
+  const byUid = new Map();
   snap.forEach((d) => {
-    const data = d.data();
-    if (data.handle) next.set(data.handle.toLowerCase(), { uid: d.id, displayName: data.displayName });
+    const data = { uid: d.id, ...d.data() };
+    if (data.handle) byHandle.set(data.handle.toLowerCase(), data);
+    byUid.set(d.id, data);
   });
-  usersByHandle = next;
+  usersByHandle = byHandle;
+  usersByUid = byUid;
+  if (currentUser) {
+    currentUserDoc = byUid.get(currentUser.uid) || null;
+    updateChipHandle();
+  }
+  // live-refresh feed handles/mentions and an open profile
+  document.querySelectorAll("[data-author-id]").forEach(refreshPostHandleDisplay);
+  if (currentProfileHandle) renderProfileFor(currentProfileHandle);
 });
 
 // ============================================================
@@ -230,11 +271,52 @@ onSnapshot(collection(db, "characters"), (snap) => {
       <div class="avatar" style="background:${c.avatarColor}">${initials(c.name)}</div>
       <div>
         <span class="cast-name">${escapeHtml(c.name)}</span>
+        <span class="cast-handle">@${c.id}</span>
         <span class="cast-persona">${escapeHtml(c.persona.split(".")[0])}.</span>
       </div>
     `;
+    li.onclick = () => navigateToProfile(c.id);
     castList.appendChild(li);
   });
+  if (currentProfileHandle) renderProfileFor(currentProfileHandle);
+});
+
+// ============================================================
+// Mention resolution (users + characters share one @handle space)
+// ============================================================
+
+function resolveMentionable(handleLower) {
+  const u = usersByHandle.get(handleLower);
+  if (u) return { type: "user", id: u.uid, displayName: u.displayName, handle: u.handle };
+  const c = characters.find((c) => c.id.toLowerCase() === handleLower);
+  if (c) return { type: "character", id: c.id, displayName: c.name, handle: c.id };
+  return null;
+}
+
+function renderTextWithMentions(text) {
+  const escaped = escapeHtml(text);
+  return escaped.replace(/(^|\s)@([a-z0-9_]{2,20})/gi, (whole, pre, handle) => {
+    const entry = resolveMentionable(handle.toLowerCase());
+    if (entry) return `${pre}<span class="mention" data-goto-handle="${entry.handle}">@${handle}</span>`;
+    return whole;
+  });
+}
+
+function extractMentionedUsers(text, excludeUid) {
+  const found = new Map();
+  const re = /(^|\s)@([a-z0-9_]{2,20})/gi;
+  let m;
+  while ((m = re.exec(text))) {
+    const entry = resolveMentionable(m[2].toLowerCase());
+    if (entry && entry.type === "user" && entry.id !== excludeUid) found.set(entry.id, entry);
+  }
+  return [...found.values()];
+}
+
+// clicking any rendered @mention navigates to that profile
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-goto-handle]");
+  if (el) navigateToProfile(el.dataset.gotoHandle);
 });
 
 // ============================================================
@@ -257,6 +339,12 @@ onSnapshot(topLevelQuery, (snap) => {
   });
 });
 
+function handleForAuthor(post) {
+  if (post.authorType === "character") return post.authorId;
+  const u = usersByUid.get(post.authorId);
+  return u ? u.handle : null;
+}
+
 function renderThreadNode(post, container, depth, insertAtTop) {
   if (postElements.has(post.id)) return postElements.get(post.id).el;
 
@@ -264,13 +352,17 @@ function renderThreadNode(post, container, depth, insertAtTop) {
   const el = document.createElement("article");
   el.className = isReply ? "post reply" : "post";
   el.dataset.postId = post.id;
+  el.dataset.authorId = post.authorId;
+  el.dataset.authorType = post.authorType;
 
   const color = post.authorType === "character" ? colorForCharacter(post.authorId) : "#372c4d";
+  const handle = handleForAuthor(post);
 
   el.innerHTML = `
     <div class="post-head">
-      <div class="avatar" style="background:${color}">${initials(post.authorName)}</div>
-      <span class="post-name">${escapeHtml(post.authorName || "Unknown")}</span>
+      <div class="avatar" style="background:${color}" data-role="avatar">${initials(post.authorName)}</div>
+      <span class="post-name" data-role="name">${escapeHtml(post.authorName || "Unknown")}</span>
+      <span class="post-handle" data-role="handle">${handle ? "@" + escapeHtml(handle) : ""}</span>
       <span class="post-time" data-time>${formatTime(post.createdAt)}</span>
     </div>
     <p class="post-text">${renderTextWithMentions(post.text)}</p>
@@ -283,24 +375,20 @@ function renderThreadNode(post, container, depth, insertAtTop) {
 
   const childrenEl = el.querySelector(".thread-children");
   const replySlot = el.querySelector(".reply-slot");
-  el.querySelector('[data-action="reply"]').addEventListener("click", () => {
-    toggleInlineReply(replySlot, post);
-  });
+  el.querySelector('[data-action="reply"]').addEventListener("click", () => toggleInlineReply(replySlot, post));
+
+  const goToAuthor = () => {
+    if (handle) navigateToProfile(handle);
+  };
+  el.querySelector('[data-role="name"]').addEventListener("click", goToAuthor);
+  el.querySelector('[data-role="handle"]').addEventListener("click", goToAuthor);
 
   postElements.set(post.id, { el, childrenEl, data: post });
 
-  if (insertAtTop) {
-    container.insertBefore(el, container.firstChild);
-  } else {
-    container.appendChild(el);
-  }
+  if (insertAtTop) container.insertBefore(el, container.firstChild);
+  else container.appendChild(el);
 
-  // listen for direct children of this post (works recursively at any depth)
-  const childQuery = query(
-    collection(db, "posts"),
-    where("parentId", "==", post.id),
-    orderBy("createdAt", "asc")
-  );
+  const childQuery = query(collection(db, "posts"), where("parentId", "==", post.id), orderBy("createdAt", "asc"));
   onSnapshot(childQuery, (snap) => {
     snap.docChanges().forEach((change) => {
       if (change.type !== "added") return;
@@ -310,6 +398,14 @@ function renderThreadNode(post, container, depth, insertAtTop) {
   });
 
   return el;
+}
+
+function refreshPostHandleDisplay(el) {
+  const entry = postElements.get(el.dataset.postId);
+  if (!entry) return;
+  const handle = handleForAuthor(entry.data);
+  const handleEl = el.querySelector('[data-role="handle"]');
+  if (handleEl) handleEl.textContent = handle ? `@${handle}` : "";
 }
 
 function colorForCharacter(id) {
@@ -348,11 +444,7 @@ function toggleInlineReply(slot, post) {
     }
     note.textContent = "";
     try {
-      await submitPost(text, post.id, {
-        authorType: post.authorType,
-        authorId: post.authorId,
-        authorName: post.authorName,
-      });
+      await submitPost(text, post.id, { authorType: post.authorType, authorId: post.authorId, authorName: post.authorName });
       slot.innerHTML = "";
     } catch (err) {
       console.error(err);
@@ -363,7 +455,6 @@ function toggleInlineReply(slot, post) {
   textarea.focus();
 }
 
-// live-updating relative timestamps
 setInterval(() => {
   document.querySelectorAll("[data-time]").forEach((elm) => {
     const entry = [...postElements.values()].find((p) => p.el.contains(elm));
@@ -382,31 +473,15 @@ function formatTime(ts) {
   return ts.toDate().toLocaleDateString();
 }
 
+function formatDate(ts) {
+  if (!ts || !ts.toDate) return "recently";
+  return ts.toDate().toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
 function escapeHtml(str) {
   const div = document.createElement("div");
   div.textContent = str ?? "";
   return div.innerHTML;
-}
-
-function renderTextWithMentions(text) {
-  const escaped = escapeHtml(text);
-  return escaped.replace(/(^|\s)@([a-z0-9_]{2,20})/gi, (whole, pre, handle) => {
-    if (usersByHandle.has(handle.toLowerCase())) {
-      return `${pre}<span class="mention">@${handle}</span>`;
-    }
-    return whole;
-  });
-}
-
-function extractMentionedUsers(text, excludeUid) {
-  const found = new Map();
-  const re = /(^|\s)@([a-z0-9_]{2,20})/gi;
-  let m;
-  while ((m = re.exec(text))) {
-    const entry = usersByHandle.get(m[2].toLowerCase());
-    if (entry && entry.uid !== excludeUid) found.set(entry.uid, entry);
-  }
-  return [...found.values()];
 }
 
 // ============================================================
@@ -455,10 +530,6 @@ composer.addEventListener("submit", async (e) => {
   }
 });
 
-/**
- * Creates a post (top-level if parentId is null, otherwise a threaded reply),
- * fires notifications, and gives the cast a chance to jump in.
- */
 async function submitPost(text, parentId, parentAuthorInfo) {
   const postRef = await addDoc(collection(db, "posts"), {
     authorType: "user",
@@ -466,6 +537,7 @@ async function submitPost(text, parentId, parentAuthorInfo) {
     authorName: currentUser.displayName || "Anonymous",
     text,
     parentId,
+    parentAuthorName: parentAuthorInfo ? parentAuthorInfo.authorName : null,
     createdAt: serverTimestamp(),
   });
   localStorage.setItem("backlot:lastPostAt", String(Date.now()));
@@ -495,32 +567,16 @@ async function submitPost(text, parentId, parentAuthorInfo) {
 async function afterPostCreated({ postId, text, authorType, authorId, authorName, parentAuthorInfo }) {
   const jobs = [];
 
-  // notify the person being replied to
   if (parentAuthorInfo && parentAuthorInfo.authorType === "user") {
     const isSelfReply = authorType === "user" && authorId === parentAuthorInfo.authorId;
     if (!isSelfReply) {
-      jobs.push(
-        createNotification(parentAuthorInfo.authorId, {
-          type: "reply",
-          fromName: authorName,
-          snippet: text,
-          sourcePostId: postId,
-        })
-      );
+      jobs.push(createNotification(parentAuthorInfo.authorId, { type: "reply", fromName: authorName, snippet: text, sourcePostId: postId }));
     }
   }
 
-  // notify anyone @mentioned
   const mentioned = extractMentionedUsers(text, authorType === "user" ? authorId : null);
   mentioned.forEach((u) => {
-    jobs.push(
-      createNotification(u.uid, {
-        type: "mention",
-        fromName: authorName,
-        snippet: text,
-        sourcePostId: postId,
-      })
-    );
+    jobs.push(createNotification(u.id, { type: "mention", fromName: authorName, snippet: text, sourcePostId: postId }));
   });
 
   await Promise.all(jobs);
@@ -543,12 +599,7 @@ let latestNotifs = [];
 
 function listenForNotifications(uid) {
   if (notifUnsub) notifUnsub();
-  const q = query(
-    collection(db, "notifications"),
-    where("toUserId", "==", uid),
-    orderBy("createdAt", "desc"),
-    limit(30)
-  );
+  const q = query(collection(db, "notifications"), where("toUserId", "==", uid), orderBy("createdAt", "desc"), limit(30));
   notifUnsub = onSnapshot(q, (snap) => {
     latestNotifs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     renderNotifications();
@@ -559,7 +610,6 @@ function renderNotifications() {
   const unread = latestNotifs.filter((n) => !n.read).length;
   notifBadge.hidden = unread === 0;
   notifBadge.textContent = unread > 9 ? "9+" : String(unread);
-
   notifEmpty.hidden = latestNotifs.length > 0;
   notifList.innerHTML = "";
   latestNotifs.forEach((n) => {
@@ -577,6 +627,8 @@ function renderNotifications() {
     btn.onclick = () => {
       markNotificationRead(n);
       notifPanel.hidden = true;
+      location.hash = "";
+      showFeedView();
       jumpToPost(n.sourcePostId);
     };
     notifList.appendChild(btn);
@@ -592,13 +644,9 @@ async function markNotificationRead(n) {
   }
 }
 
-notifBtn.addEventListener("click", () => {
-  notifPanel.hidden = !notifPanel.hidden;
-});
+notifBtn.addEventListener("click", () => (notifPanel.hidden = !notifPanel.hidden));
 document.addEventListener("click", (e) => {
-  if (!notifPanel.hidden && !e.target.closest(".notif-wrap")) {
-    notifPanel.hidden = true;
-  }
+  if (!notifPanel.hidden && !e.target.closest(".notif-wrap")) notifPanel.hidden = true;
 });
 
 // ============================================================
@@ -610,7 +658,6 @@ async function jumpToPost(postId) {
     scrollAndHighlight(postId);
     return;
   }
-
   let current;
   try {
     const snap = await getDoc(doc(db, "posts", postId));
@@ -620,19 +667,13 @@ async function jumpToPost(postId) {
     console.error(err);
     return;
   }
-
-  // walk up to the top-level ancestor so the whole thread renders
   let root = current;
   while (root.parentId) {
     const parentSnap = await getDoc(doc(db, "posts", root.parentId));
     if (!parentSnap.exists()) break;
     root = { id: parentSnap.id, ...parentSnap.data() };
   }
-
-  if (!postElements.has(root.id)) {
-    renderThreadNode(root, feed, 0, true);
-  }
-
+  if (!postElements.has(root.id)) renderThreadNode(root, feed, 0, true);
   waitThenScroll(postId, 0);
 }
 
@@ -641,7 +682,7 @@ function waitThenScroll(postId, attempt) {
     scrollAndHighlight(postId);
     return;
   }
-  if (attempt > 20) return; // ~3s of trying, then give up quietly
+  if (attempt > 20) return;
   setTimeout(() => waitThenScroll(postId, attempt + 1), 150);
 }
 
@@ -654,19 +695,207 @@ function scrollAndHighlight(postId) {
 }
 
 // ============================================================
+// Profile pages — #/u/<handle>, still just a filtered view of one feed
+// ============================================================
+
+function showFeedView() {
+  currentProfileHandle = null;
+  if (profilePostsUnsub) {
+    profilePostsUnsub();
+    profilePostsUnsub = null;
+  }
+  profileView.hidden = true;
+  mainLayout.hidden = false;
+}
+
+function showProfileViewShell() {
+  mainLayout.hidden = true;
+  profileView.hidden = false;
+}
+
+function navigateToProfile(handle) {
+  location.hash = `#/u/${handle}`;
+}
+
+function parseRoute() {
+  const m = location.hash.match(/^#\/u\/([a-z0-9_]{2,20})$/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+function onRouteChange() {
+  const handle = parseRoute();
+  if (!handle) {
+    showFeedView();
+    return;
+  }
+  currentProfileHandle = handle;
+  showProfileViewShell();
+  renderProfileFor(handle);
+}
+
+window.addEventListener("hashchange", onRouteChange);
+wordmarkLink.addEventListener("click", (e) => {
+  e.preventDefault();
+  location.hash = "";
+});
+profileBack.addEventListener("click", (e) => {
+  e.preventDefault();
+  location.hash = "";
+});
+
+function renderProfileFor(handle) {
+  const entry = resolveMentionable(handle);
+  if (!entry) {
+    profileHeader.innerHTML = `<p class="feed-empty">Nobody here goes by @${escapeHtml(handle)}.</p>`;
+    profilePosts.innerHTML = "";
+    profileEmpty.hidden = true;
+    return;
+  }
+
+  const isCharacter = entry.type === "character";
+  const isMe = !isCharacter && currentUser && entry.id === currentUser.uid;
+  const color = isCharacter ? colorForCharacter(entry.id) : "#372c4d";
+  const userDoc = isCharacter ? null : usersByUid.get(entry.id);
+  const character = isCharacter ? characters.find((c) => c.id === entry.id) : null;
+
+  profileHeader.innerHTML = `
+    <div class="profile-avatar-row">
+      <div class="avatar" style="background:${color}">${initials(entry.displayName)}</div>
+      <div>
+        <div class="profile-name">${escapeHtml(entry.displayName)}</div>
+        <div class="profile-handle">@${escapeHtml(entry.handle)}</div>
+      </div>
+    </div>
+    ${character ? `<p class="profile-bio">${escapeHtml(character.persona)}</p>` : ""}
+    <p class="profile-meta">${isCharacter ? "A resident of Backlot" : `Joined ${formatDate(userDoc && userDoc.createdAt)}`}</p>
+    <div class="profile-actions" data-actions></div>
+  `;
+
+  if (isMe) {
+    const btn = document.createElement("button");
+    btn.className = "btn btn-ghost";
+    btn.textContent = "Edit name & handle";
+    btn.onclick = () => openEditModal(userDoc);
+    profileHeader.querySelector("[data-actions]").appendChild(btn);
+  }
+
+  if (profilePostsUnsub) profilePostsUnsub();
+  const q = query(collection(db, "posts"), where("authorId", "==", entry.id), orderBy("createdAt", "desc"), limit(50));
+  profilePostsUnsub = onSnapshot(q, (snap) => {
+    profileEmpty.hidden = snap.size > 0;
+    profilePosts.innerHTML = "";
+    snap.forEach((d) => renderProfilePost({ id: d.id, ...d.data() }));
+  });
+}
+
+function renderProfilePost(post) {
+  const el = document.createElement("article");
+  el.className = "post";
+  el.innerHTML = `
+    ${post.parentId ? `<p class="profile-post-reply-hint">Replying to ${escapeHtml(post.parentAuthorName || "a post")}</p>` : ""}
+    <p class="post-text">${renderTextWithMentions(post.text)}</p>
+    <div class="post-head" style="margin-top:6px;">
+      <span class="post-time">${formatTime(post.createdAt)}</span>
+    </div>
+    <div class="profile-post-actions">
+      <button class="btn-text" data-action="view">View in feed →</button>
+    </div>
+  `;
+  el.querySelector('[data-action="view"]').onclick = () => {
+    location.hash = "";
+    showFeedView();
+    setTimeout(() => jumpToPost(post.id), 60);
+  };
+  profilePosts.appendChild(el);
+}
+
+onRouteChange(); // handle a deep link on first load
+
+// ============================================================
+// Edit name & handle (7-day cooldown, enforced again server-side)
+// ============================================================
+
+function canChangeIdentity(userDoc) {
+  if (!userDoc || !userDoc.lastNameChangeAt || !userDoc.lastNameChangeAt.toDate) return { allowed: true };
+  const elapsed = Date.now() - userDoc.lastNameChangeAt.toDate().getTime();
+  if (elapsed >= IDENTITY_COOLDOWN_MS) return { allowed: true };
+  const daysLeft = Math.ceil((IDENTITY_COOLDOWN_MS - elapsed) / 86400000);
+  return { allowed: false, daysLeft };
+}
+
+function openEditModal(userDoc) {
+  const status = canChangeIdentity(userDoc);
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal">
+      <h3>Edit name &amp; handle</h3>
+      <label for="editName">Display name</label>
+      <input type="text" id="editName" maxlength="40" value="${escapeHtml(userDoc?.displayName || "")}" ${status.allowed ? "" : "disabled"} />
+
+      <label for="editHandle">Handle</label>
+      <input type="text" id="editHandle" maxlength="20" value="${escapeHtml(userDoc?.handle || "")}" ${status.allowed ? "" : "disabled"} />
+      <p class="modal-hint">Lowercase letters, numbers, underscores only. 2–20 characters.</p>
+
+      ${status.allowed ? "" : `<p class="modal-hint">You can change these again in ${status.daysLeft} day${status.daysLeft === 1 ? "" : "s"}.</p>`}
+      <p class="modal-error" data-error></p>
+
+      <div class="modal-row">
+        <button class="btn-text" data-action="cancel">Cancel</button>
+        <button class="btn btn-primary" data-action="save" ${status.allowed ? "" : "disabled"}>Save</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('[data-action="cancel"]').onclick = close;
+
+  overlay.querySelector('[data-action="save"]').onclick = async () => {
+    const nameInput = overlay.querySelector("#editName");
+    const handleInput = overlay.querySelector("#editHandle");
+    const errorEl = overlay.querySelector("[data-error]");
+    const displayName = nameInput.value.trim();
+    const handle = handleInput.value.trim().toLowerCase();
+
+    if (!displayName) return (errorEl.textContent = "Display name can't be empty.");
+    if (!HANDLE_PATTERN.test(handle)) return (errorEl.textContent = "Handle must be 2–20 lowercase letters, numbers, or underscores.");
+    if (characters.some((c) => c.id.toLowerCase() === handle)) return (errorEl.textContent = "That handle belongs to a cast member.");
+
+    errorEl.textContent = "Checking availability…";
+    try {
+      const existing = await getDocs(query(collection(db, "users"), where("handle", "==", handle)));
+      const takenByOther = existing.docs.some((d) => d.id !== currentUser.uid);
+      if (takenByOther) return (errorEl.textContent = "That handle's taken.");
+
+      await updateDoc(doc(db, "users", currentUser.uid), {
+        displayName,
+        handle,
+        lastNameChangeAt: serverTimestamp(),
+      });
+      close();
+      navigateToProfile(handle);
+    } catch (err) {
+      console.error(err);
+      errorEl.textContent = "Couldn't save — try again.";
+    }
+  };
+}
+
+// ============================================================
 // AI character replies
 // ============================================================
 
 function triggerCharacterReplies(postId, postText, parentAuthorInfo) {
   const candidates = characters.filter((c) => c.active !== false);
   const shuffled = [...candidates].sort(() => Math.random() - 0.5);
-
   let repliesSent = 0;
   for (const character of shuffled) {
     if (repliesSent >= MAX_CHARACTER_REPLIES_PER_POST) break;
     if (Math.random() > (character.replyChance ?? 0.5)) continue;
     repliesSent += 1;
-    askCharacter(character, postId, postText, parentAuthorInfo); // fire and forget
+    askCharacter(character, postId, postText, parentAuthorInfo);
   }
 }
 
@@ -676,12 +905,7 @@ async function askCharacter(character, postId, originalText, parentAuthorInfo) {
     const res = await fetch(WORKER_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        idToken,
-        characterName: character.name,
-        persona: character.persona,
-        postText: originalText,
-      }),
+      body: JSON.stringify({ idToken, characterName: character.name, persona: character.persona, postText: originalText }),
     });
     if (!res.ok) throw new Error(`Worker returned ${res.status}`);
     const data = await res.json();
@@ -694,6 +918,7 @@ async function askCharacter(character, postId, originalText, parentAuthorInfo) {
       authorName: character.name,
       text: reply,
       parentId: postId,
+      parentAuthorName: parentAuthorInfo ? parentAuthorInfo.authorName : null,
       createdAt: serverTimestamp(),
     });
 
