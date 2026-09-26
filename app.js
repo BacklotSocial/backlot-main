@@ -3,15 +3,15 @@
 // ============================================================
 
 const firebaseConfig = {
-  apiKey: "YOUR_FIREBASE_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyBDtgv6RsdcSr4Kh3Gc91qNt7iw-n4vkkg",
+  authDomain: "backlot-297a9.firebaseapp.com",
+  projectId: "backlot-297a9",
+  storageBucket: "backlot-297a9.firebasestorage.app",
+  messagingSenderId: "974601219948",
+  appId: "1:974601219948:web:51b89ac66b79618c248d49"
 };
 
-const WORKER_URL = "https://backlot-worker.YOUR-SUBDOMAIN.workers.dev/generate-reply";
+const WORKER_URL = "https://backlot-worker.backlotsocial.workers.dev/generate-reply";
 
 // Seed cast. `id` doubles as the character's handle (@mara, @juno, @walt).
 const SEED_CHARACTERS = [
