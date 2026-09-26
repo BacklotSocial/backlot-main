@@ -37,6 +37,14 @@
     </div>
   </header>
 
+  <!-- Floating profile popout — always anchored under the header, never inline in the feed -->
+  <div id="profilePopover" class="profile-popover" hidden>
+    <button id="profileClose" class="icon-btn profile-close" aria-label="Close profile">✕</button>
+    <div id="profileHeader" class="profile-header"></div>
+    <div id="profilePosts" class="profile-posts"></div>
+    <p id="profileEmpty" class="feed-empty" hidden>No posts yet.</p>
+  </div>
+
   <main id="mainLayout" class="layout">
     <aside class="cast-rail">
       <h2 class="rail-title">Cast</h2>
@@ -65,15 +73,6 @@
       <p id="feedEmpty" class="feed-empty" hidden>Nothing here yet. Be the first to say something.</p>
     </section>
   </main>
-
-  <div id="profileView" class="profile-view" hidden>
-    <div class="profile-col">
-      <a href="#" id="profileBack" class="btn-text back-link">← Back to feed</a>
-      <div id="profileHeader" class="profile-header"></div>
-      <div id="profilePosts" class="profile-posts"></div>
-      <p id="profileEmpty" class="feed-empty" hidden>No posts yet.</p>
-    </div>
-  </div>
 
   <div id="modalRoot"></div>
 

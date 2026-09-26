@@ -104,23 +104,65 @@ const notifBadge = document.getElementById("notifBadge");
 const notifPanel = document.getElementById("notifPanel");
 const notifList = document.getElementById("notifList");
 const notifEmpty = document.getElementById("notifEmpty");
-const mainLayout = document.getElementById("mainLayout");
-const profileView = document.getElementById("profileView");
+const profilePopover = document.getElementById("profilePopover");
+const profileClose = document.getElementById("profileClose");
 const profileHeader = document.getElementById("profileHeader");
 const profilePosts = document.getElementById("profilePosts");
 const profileEmpty = document.getElementById("profileEmpty");
-const profileBack = document.getElementById("profileBack");
 const modalRoot = document.getElementById("modalRoot");
 const wordmarkLink = document.getElementById("wordmarkLink");
 
 let currentUser = null;
-let currentUserDoc = null; // { handle, displayName, createdAt, lastNameChangeAt, ... }
 let characters = [];
-let usersByHandle = new Map(); // handle -> { uid, displayName, ...doc }
-let usersByUid = new Map(); // uid -> { handle, displayName, ...doc }
+let usersByHandle = new Map(); // handle -> { uid, displayName, photoURL, ... }
+let usersByUid = new Map(); // uid -> { handle, displayName, photoURL, ... }
 const postElements = new Map(); // postId -> { el, childrenEl, data }
 let profilePostsUnsub = null;
 let currentProfileHandle = null;
+
+// ============================================================
+// Avatars — real Google photo when we have one, initials otherwise
+// ============================================================
+
+function initials(name) {
+  return (name || "?")
+    .split(" ")
+    .map((p) => p[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// Returns HTML for an avatar. If a photo URL is given, renders an <img class="avatar">
+// that silently falls back to the initials/color version if the image fails to load
+// (handled by the single delegated 'error' listener below — inline onerror isn't
+// reliable once the src is escaped into an attribute).
+function avatarMarkup(name, color, photoURL) {
+  const label = initials(name);
+  if (photoURL) {
+    return `<img class="avatar" src="${escapeAttr(photoURL)}" alt="" data-fallback-initials="${escapeAttr(label)}" data-fallback-color="${escapeAttr(color)}" />`;
+  }
+  return `<div class="avatar" style="background:${color}">${label}</div>`;
+}
+
+// 'error' events on <img> don't bubble, so this needs the capture phase.
+document.addEventListener(
+  "error",
+  (e) => {
+    const img = e.target;
+    if (img.tagName !== "IMG" || !img.classList.contains("avatar")) return;
+    const div = document.createElement("div");
+    div.className = "avatar";
+    div.style.background = img.dataset.fallbackColor || "#372c4d";
+    div.textContent = img.dataset.fallbackInitials || "?";
+    img.replaceWith(div);
+  },
+  true
+);
 
 // ============================================================
 // Auth
@@ -207,7 +249,7 @@ async function ensureUserDoc(user) {
     });
   } else {
     const data = snap.data();
-    const patch = { photoURL: user.photoURL || null };
+    const patch = { photoURL: user.photoURL || null }; // photo refreshes freely on every sign-in
     if (!data.createdAt) patch.createdAt = serverTimestamp(); // backfill for pre-existing accounts
     await setDoc(ref, patch, { merge: true });
   }
@@ -223,12 +265,8 @@ onSnapshot(collection(db, "users"), (snap) => {
   });
   usersByHandle = byHandle;
   usersByUid = byUid;
-  if (currentUser) {
-    currentUserDoc = byUid.get(currentUser.uid) || null;
-    updateChipHandle();
-  }
-  // live-refresh feed handles/mentions and an open profile
-  document.querySelectorAll("[data-author-id]").forEach(refreshPostHandleDisplay);
+  if (currentUser) updateChipHandle();
+  document.querySelectorAll(".post[data-post-id]").forEach(refreshPostHeadDisplay);
   if (currentProfileHandle) renderProfileFor(currentProfileHandle);
 });
 
@@ -252,15 +290,6 @@ async function ensureCharactersSeeded() {
   );
 }
 
-function initials(name) {
-  return (name || "?")
-    .split(" ")
-    .map((p) => p[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-}
-
 onSnapshot(collection(db, "characters"), (snap) => {
   characters = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
   castList.innerHTML = "";
@@ -268,7 +297,7 @@ onSnapshot(collection(db, "characters"), (snap) => {
     const li = document.createElement("li");
     li.className = "cast-item";
     li.innerHTML = `
-      <div class="avatar" style="background:${c.avatarColor}">${initials(c.name)}</div>
+      ${avatarMarkup(c.name, c.avatarColor, null)}
       <div>
         <span class="cast-name">${escapeHtml(c.name)}</span>
         <span class="cast-handle">@${c.id}</span>
@@ -287,7 +316,7 @@ onSnapshot(collection(db, "characters"), (snap) => {
 
 function resolveMentionable(handleLower) {
   const u = usersByHandle.get(handleLower);
-  if (u) return { type: "user", id: u.uid, displayName: u.displayName, handle: u.handle };
+  if (u) return { type: "user", id: u.uid, displayName: u.displayName, handle: u.handle, photoURL: u.photoURL };
   const c = characters.find((c) => c.id.toLowerCase() === handleLower);
   if (c) return { type: "character", id: c.id, displayName: c.name, handle: c.id };
   return null;
@@ -339,10 +368,13 @@ onSnapshot(topLevelQuery, (snap) => {
   });
 });
 
-function handleForAuthor(post) {
-  if (post.authorType === "character") return post.authorId;
+function authorInfoFor(post) {
+  if (post.authorType === "character") {
+    const c = characters.find((c) => c.id === post.authorId);
+    return { handle: post.authorId, color: c ? c.avatarColor : "#372c4d", photoURL: null };
+  }
   const u = usersByUid.get(post.authorId);
-  return u ? u.handle : null;
+  return { handle: u ? u.handle : null, color: "#372c4d", photoURL: u ? u.photoURL : null };
 }
 
 function renderThreadNode(post, container, depth, insertAtTop) {
@@ -352,17 +384,14 @@ function renderThreadNode(post, container, depth, insertAtTop) {
   const el = document.createElement("article");
   el.className = isReply ? "post reply" : "post";
   el.dataset.postId = post.id;
-  el.dataset.authorId = post.authorId;
-  el.dataset.authorType = post.authorType;
 
-  const color = post.authorType === "character" ? colorForCharacter(post.authorId) : "#372c4d";
-  const handle = handleForAuthor(post);
+  const info = authorInfoFor(post);
 
   el.innerHTML = `
     <div class="post-head">
-      <div class="avatar" style="background:${color}" data-role="avatar">${initials(post.authorName)}</div>
+      <span data-role="avatar-slot">${avatarMarkup(post.authorName, info.color, info.photoURL)}</span>
       <span class="post-name" data-role="name">${escapeHtml(post.authorName || "Unknown")}</span>
-      <span class="post-handle" data-role="handle">${handle ? "@" + escapeHtml(handle) : ""}</span>
+      <span class="post-handle" data-role="handle">${info.handle ? "@" + escapeHtml(info.handle) : ""}</span>
       <span class="post-time" data-time>${formatTime(post.createdAt)}</span>
     </div>
     <p class="post-text">${renderTextWithMentions(post.text)}</p>
@@ -378,7 +407,7 @@ function renderThreadNode(post, container, depth, insertAtTop) {
   el.querySelector('[data-action="reply"]').addEventListener("click", () => toggleInlineReply(replySlot, post));
 
   const goToAuthor = () => {
-    if (handle) navigateToProfile(handle);
+    if (info.handle) navigateToProfile(info.handle);
   };
   el.querySelector('[data-role="name"]').addEventListener("click", goToAuthor);
   el.querySelector('[data-role="handle"]').addEventListener("click", goToAuthor);
@@ -400,17 +429,18 @@ function renderThreadNode(post, container, depth, insertAtTop) {
   return el;
 }
 
-function refreshPostHandleDisplay(el) {
+// re-render a post's avatar/handle once the users collection catches up
+// (handles a fresh sign-up whose post rendered before their user doc arrived)
+function refreshPostHeadDisplay(el) {
   const entry = postElements.get(el.dataset.postId);
   if (!entry) return;
-  const handle = handleForAuthor(entry.data);
+  const info = authorInfoFor(entry.data);
   const handleEl = el.querySelector('[data-role="handle"]');
-  if (handleEl) handleEl.textContent = handle ? `@${handle}` : "";
-}
-
-function colorForCharacter(id) {
-  const c = characters.find((c) => c.id === id);
-  return c ? c.avatarColor : "#372c4d";
+  if (handleEl) handleEl.textContent = info.handle ? `@${info.handle}` : "";
+  const slot = el.querySelector('[data-role="avatar-slot"]');
+  if (slot && slot.firstElementChild && slot.firstElementChild.tagName !== "IMG" && info.photoURL) {
+    slot.innerHTML = avatarMarkup(entry.data.authorName, info.color, info.photoURL);
+  }
 }
 
 function toggleInlineReply(slot, post) {
@@ -627,8 +657,7 @@ function renderNotifications() {
     btn.onclick = () => {
       markNotificationRead(n);
       notifPanel.hidden = true;
-      location.hash = "";
-      showFeedView();
+      closeProfilePopover();
       jumpToPost(n.sourcePostId);
     };
     notifList.appendChild(btn);
@@ -695,22 +724,24 @@ function scrollAndHighlight(postId) {
 }
 
 // ============================================================
-// Profile pages — #/u/<handle>, still just a filtered view of one feed
+// Profile popout — floats under the header, feed always stays visible
 // ============================================================
 
-function showFeedView() {
+function openProfilePopover(handle) {
+  currentProfileHandle = handle.toLowerCase();
+  profilePopover.hidden = false;
+  renderProfileFor(currentProfileHandle);
+}
+
+function closeProfilePopover() {
+  if (profilePopover.hidden) return;
   currentProfileHandle = null;
+  profilePopover.hidden = true;
   if (profilePostsUnsub) {
     profilePostsUnsub();
     profilePostsUnsub = null;
   }
-  profileView.hidden = true;
-  mainLayout.hidden = false;
-}
-
-function showProfileViewShell() {
-  mainLayout.hidden = true;
-  profileView.hidden = false;
+  if (location.hash.startsWith("#/u/")) history.replaceState(null, "", location.pathname + location.search);
 }
 
 function navigateToProfile(handle) {
@@ -724,13 +755,8 @@ function parseRoute() {
 
 function onRouteChange() {
   const handle = parseRoute();
-  if (!handle) {
-    showFeedView();
-    return;
-  }
-  currentProfileHandle = handle;
-  showProfileViewShell();
-  renderProfileFor(handle);
+  if (handle) openProfilePopover(handle);
+  else closeProfilePopover();
 }
 
 window.addEventListener("hashchange", onRouteChange);
@@ -738,9 +764,18 @@ wordmarkLink.addEventListener("click", (e) => {
   e.preventDefault();
   location.hash = "";
 });
-profileBack.addEventListener("click", (e) => {
-  e.preventDefault();
+profileClose.addEventListener("click", () => {
   location.hash = "";
+});
+document.addEventListener("click", (e) => {
+  if (profilePopover.hidden) return;
+  const insideTrigger = e.target.closest(
+    "[data-goto-handle], .post-name, .post-handle, .cast-item, .chip-name, #profilePopover"
+  );
+  if (!insideTrigger) location.hash = "";
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !profilePopover.hidden) location.hash = "";
 });
 
 function renderProfileFor(handle) {
@@ -754,13 +789,13 @@ function renderProfileFor(handle) {
 
   const isCharacter = entry.type === "character";
   const isMe = !isCharacter && currentUser && entry.id === currentUser.uid;
-  const color = isCharacter ? colorForCharacter(entry.id) : "#372c4d";
+  const color = isCharacter ? (characters.find((c) => c.id === entry.id) || {}).avatarColor : "#372c4d";
   const userDoc = isCharacter ? null : usersByUid.get(entry.id);
   const character = isCharacter ? characters.find((c) => c.id === entry.id) : null;
 
   profileHeader.innerHTML = `
     <div class="profile-avatar-row">
-      <div class="avatar" style="background:${color}">${initials(entry.displayName)}</div>
+      ${avatarMarkup(entry.displayName, color, entry.photoURL)}
       <div>
         <div class="profile-name">${escapeHtml(entry.displayName)}</div>
         <div class="profile-handle">@${escapeHtml(entry.handle)}</div>
@@ -803,7 +838,6 @@ function renderProfilePost(post) {
   `;
   el.querySelector('[data-action="view"]').onclick = () => {
     location.hash = "";
-    showFeedView();
     setTimeout(() => jumpToPost(post.id), 60);
   };
   profilePosts.appendChild(el);
@@ -831,10 +865,10 @@ function openEditModal(userDoc) {
     <div class="modal">
       <h3>Edit name &amp; handle</h3>
       <label for="editName">Display name</label>
-      <input type="text" id="editName" maxlength="40" value="${escapeHtml(userDoc?.displayName || "")}" ${status.allowed ? "" : "disabled"} />
+      <input type="text" id="editName" maxlength="40" value="${escapeAttr(userDoc?.displayName || "")}" ${status.allowed ? "" : "disabled"} />
 
       <label for="editHandle">Handle</label>
-      <input type="text" id="editHandle" maxlength="20" value="${escapeHtml(userDoc?.handle || "")}" ${status.allowed ? "" : "disabled"} />
+      <input type="text" id="editHandle" maxlength="20" value="${escapeAttr(userDoc?.handle || "")}" ${status.allowed ? "" : "disabled"} />
       <p class="modal-hint">Lowercase letters, numbers, underscores only. 2–20 characters.</p>
 
       ${status.allowed ? "" : `<p class="modal-hint">You can change these again in ${status.daysLeft} day${status.daysLeft === 1 ? "" : "s"}.</p>`}
