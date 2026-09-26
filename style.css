@@ -1,0 +1,429 @@
+:root {
+  --bg: #15111f;
+  --panel: #1e1930;
+  --panel-raised: #26203a;
+  --line: #2f2745;
+  --ink: #f1edf9;
+  --muted: #a297bd;
+  --accent: #8b5cf6;
+  --accent-hover: #9d70f8;
+  --accent-soft: #2a2145;
+  --accent-ink: #ffffff;
+  --mention: #c4b5fd;
+  --live: #f0729a;
+
+  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --font-body: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+/* ---------- topbar ---------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 28px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: rgba(21, 17, 31, 0.9);
+  backdrop-filter: blur(10px);
+  z-index: 20;
+}
+
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.4rem;
+  letter-spacing: -0.01em;
+  background: linear-gradient(90deg, var(--ink), var(--mention));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-area { display: flex; align-items: center; gap: 12px; }
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.user-chip img {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid var(--panel-raised);
+}
+
+/* ---------- icon button + notifications ---------- */
+
+.icon-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 140ms ease;
+}
+.icon-btn:hover { background: var(--panel-raised); }
+
+.notif-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--live);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.notif-wrap { position: relative; }
+
+.notif-panel {
+  position: absolute;
+  right: 0;
+  top: 48px;
+  width: 340px;
+  max-height: 420px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  padding: 6px;
+}
+
+.notif-panel-head {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 10px 12px 8px;
+}
+
+.notif-list { display: flex; flex-direction: column; gap: 2px; }
+
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  border: none;
+  background: transparent;
+  width: 100%;
+  color: var(--ink);
+  font-family: var(--font-body);
+}
+.notif-item:hover { background: var(--panel-raised); }
+.notif-item.unread { background: var(--accent-soft); }
+.notif-item.unread:hover { background: var(--panel-raised); }
+
+.notif-item .avatar { width: 30px; height: 30px; min-width: 30px; font-size: 0.75rem; }
+
+.notif-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.notif-line { font-size: 0.86rem; }
+.notif-line b { font-weight: 600; }
+.notif-snippet {
+  font-size: 0.8rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notif-time { font-size: 0.72rem; color: var(--muted); }
+
+.notif-empty {
+  font-size: 0.85rem;
+  color: var(--muted);
+  padding: 20px 12px;
+  text-align: center;
+}
+
+/* ---------- buttons ---------- */
+
+.btn {
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 80ms ease;
+}
+.btn:active { transform: scale(0.97); }
+.btn:disabled { cursor: not-allowed; opacity: 0.45; }
+
+.btn-primary { background: var(--accent); color: var(--accent-ink); }
+.btn-primary:not(:disabled):hover { background: var(--accent-hover); }
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--ink);
+}
+.btn-ghost:hover { border-color: var(--accent); }
+
+.btn-text {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 4px 8px;
+  font-size: 0.82rem;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.btn-text:hover { color: var(--ink); background: var(--panel-raised); }
+
+/* ---------- layout ---------- */
+
+.layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 600px);
+  gap: 40px;
+  justify-content: center;
+  padding: 32px 28px 80px;
+}
+
+@media (max-width: 780px) {
+  .layout { grid-template-columns: 1fr; padding: 20px 14px 64px; gap: 20px; }
+}
+
+/* ---------- cast rail ---------- */
+
+.rail-title {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.rail-hint {
+  font-size: 0.84rem;
+  color: var(--muted);
+  margin: 0 0 16px;
+  max-width: 32ch;
+}
+
+.cast-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+@media (max-width: 780px) {
+  .cast-list { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+}
+
+.cast-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: var(--radius-md);
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #17101f;
+}
+
+.cast-name { font-size: 0.88rem; white-space: nowrap; }
+.cast-persona { font-size: 0.78rem; color: var(--muted); display: block; }
+
+/* ---------- composer ---------- */
+
+.composer {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  margin-bottom: 28px;
+}
+
+.composer-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 1.02rem;
+  resize: vertical;
+  min-height: 60px;
+  outline: none;
+}
+.composer-input::placeholder { color: var(--muted); }
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.char-count { font-size: 0.78rem; color: var(--muted); }
+
+.composer-note {
+  margin: 8px 0 0;
+  font-size: 0.8rem;
+  color: var(--live);
+  min-height: 1em;
+}
+
+/* ---------- feed ---------- */
+
+.feed-empty { color: var(--muted); font-size: 0.9rem; }
+
+.post {
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  margin-bottom: 10px;
+  transition: background 160ms ease;
+}
+.post:hover { background: var(--panel); }
+
+.post.highlight {
+  animation: pulse-highlight 1.8s ease;
+}
+@keyframes pulse-highlight {
+  0% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+
+.post-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.post-name { font-family: var(--font-display); font-weight: 600; font-size: 0.96rem; }
+.post-time { font-size: 0.78rem; color: var(--muted); }
+
+.post-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mention { color: var(--mention); font-weight: 600; }
+
+.post-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 4px;
+}
+
+.thread-children {
+  margin-top: 6px;
+  margin-left: 22px;
+  padding-left: 16px;
+  border-left: 2px solid var(--line);
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* cap visual indent so deep threads don't run off-screen */
+.thread-children .thread-children .thread-children {
+  margin-left: 14px;
+  padding-left: 12px;
+}
+
+.post.reply { padding: 12px; }
+.post.reply .avatar { width: 28px; height: 28px; min-width: 28px; font-size: 0.72rem; }
+
+.inline-reply {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inline-reply textarea {
+  width: 100%;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.92rem;
+  padding: 10px 12px;
+  resize: vertical;
+  min-height: 44px;
+  outline: none;
+}
+.inline-reply textarea:focus { border-color: var(--accent); }
+
+.inline-reply-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.thinking { font-size: 0.8rem; color: var(--muted); font-style: italic; padding: 4px 4px; }
+
+/* ---------- footer ---------- */
+
+.footnote {
+  text-align: center;
+  padding: 20px;
+  font-size: 0.78rem;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}

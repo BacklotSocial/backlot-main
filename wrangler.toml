@@ -1,0 +1,9 @@
+name = "backlot-worker"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# Secrets are NOT set here — set them with:
+#   wrangler secret put GEMINI_API_KEY
+#   wrangler secret put FIREBASE_API_KEY
+#   wrangler secret put ALLOWED_ORIGIN
+# See ../README.md for the full walkthrough.

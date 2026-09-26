@@ -1,0 +1,66 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Posts and character replies live in one flat collection.
+    // parentId == null   -> top-level post
+    // parentId == <id>   -> a threaded reply to that post (can itself be replied to)
+    match /posts/{postId} {
+      allow read: if true;
+
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(
+             ['authorType', 'authorId', 'authorName', 'text', 'parentId', 'createdAt']
+           )
+        && request.resource.data.authorType in ['user', 'character']
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 500
+        && (request.resource.data.parentId == null || request.resource.data.parentId is string)
+        && request.resource.data.createdAt == request.time;
+
+      // No edits or deletes from the client — keeps the feed an honest log.
+      allow update, delete: if false;
+    }
+
+    // Character roster. Public read so the cast rail works signed-out.
+    // NOTE: any signed-in user can create/edit a character (needed so the app
+    // can self-seed on first run). Tighten this once you've seeded your cast.
+    match /characters/{characterId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // One doc per signed-in user, used to resolve @handles for mentions.
+    // No profile pages read this — it's purely a handle -> uid lookup.
+    match /users/{uid} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Notifications: "X replied to you" / "X mentioned you".
+    // Written by whoever performed the action, addressed to the recipient —
+    // that's why create isn't restricted to auth.uid == toUserId.
+    match /notifications/{notifId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.toUserId;
+
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(
+             ['toUserId', 'type', 'fromName', 'snippet', 'sourcePostId', 'createdAt', 'read']
+           )
+        && request.resource.data.type in ['reply', 'mention']
+        && request.resource.data.toUserId is string
+        && request.resource.data.snippet.size() <= 200
+        && request.resource.data.read == false
+        && request.resource.data.createdAt == request.time;
+
+      // Recipient can only flip `read` — nothing else.
+      allow update: if request.auth != null
+        && request.auth.uid == resource.data.toUserId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+
+      allow delete: if false;
+    }
+  }
+}
