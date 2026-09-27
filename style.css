@@ -309,6 +309,7 @@ img.avatar {
 .post.reply .avatar, .post.reply img.avatar { width: 28px; height: 28px; min-width: 28px; font-size: 0.72rem; }
 
 .inline-reply { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.inline-reply .mention-anchor { position: relative; }
 .inline-reply textarea {
   width: 100%;
   background: var(--panel-raised);
@@ -326,6 +327,43 @@ img.avatar {
 .inline-reply-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 
 .thinking { font-size: 0.8rem; color: var(--muted); font-style: italic; padding: 4px 4px; }
+
+/* ---------- @mention autocomplete ---------- */
+
+.mention-anchor { position: relative; }
+
+.mention-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 200px;
+  max-width: 280px;
+  z-index: 60;
+  background: var(--panel-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+}
+
+.mention-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+.mention-option:hover, .mention-option.active { background: var(--panel); }
+.mention-option .avatar, .mention-option img.avatar { width: 22px; height: 22px; min-width: 22px; font-size: 0.6rem; }
+.mention-handle { font-weight: 600; }
+.mention-name { color: var(--muted); font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- profile popout ---------- */
 

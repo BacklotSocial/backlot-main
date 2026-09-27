@@ -54,14 +54,17 @@
 
     <section class="feed-col">
       <form id="composer" class="composer" autocomplete="off">
-        <textarea
-          id="postText"
-          class="composer-input"
-          maxlength="500"
-          rows="3"
-          placeholder="Say something to the neighborhood…"
-          disabled
-        ></textarea>
+        <div class="mention-anchor">
+          <textarea
+            id="postText"
+            class="composer-input"
+            maxlength="500"
+            rows="3"
+            placeholder="Say something to the neighborhood…"
+            disabled
+          ></textarea>
+          <div id="postTextMentions" class="mention-dropdown" hidden></div>
+        </div>
         <div class="composer-row">
           <span id="charCount" class="char-count">0 / 500</span>
           <button type="submit" id="postBtn" class="btn btn-primary" disabled>Post</button>

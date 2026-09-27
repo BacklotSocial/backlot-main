@@ -351,6 +351,192 @@ document.addEventListener("click", (e) => {
 });
 
 // ============================================================
+// @mention autocomplete — everyone (users + cast), first 5 alphabetically,
+// filtered as more letters are typed. Attached to the composer and to every
+// inline reply box.
+// ============================================================
+
+function getMentionables() {
+  const list = [];
+  usersByHandle.forEach((u) => {
+    list.push({ handle: u.handle, displayName: u.displayName, photoURL: u.photoURL || null, color: "#372c4d" });
+  });
+  characters.forEach((c) => {
+    list.push({ handle: c.id, displayName: c.name, photoURL: null, color: c.avatarColor });
+  });
+  list.sort((a, b) => a.handle.localeCompare(b.handle));
+  return list;
+}
+
+// Finds the @token (if any) the caret is currently sitting inside — scans back
+// to the nearest whitespace and checks whether that word starts with "@".
+function getActiveMentionQuery(textarea) {
+  const value = textarea.value;
+  const caret = textarea.selectionStart;
+  let start = caret;
+  while (start > 0 && !/\s/.test(value[start - 1])) start--;
+  if (value[start] !== "@") return null;
+  const query = value.slice(start + 1, caret);
+  if (!/^[a-z0-9_]*$/i.test(query)) return null;
+  return { start, query };
+}
+
+// ---- caret pixel position, via the classic hidden-mirror-div technique ----
+// (mirrors the textarea's text/box model exactly up to a character index, then
+// reads where that character actually landed — the only reliable way to find a
+// caret's on-screen position in a plain <textarea>.)
+
+const CARET_MIRROR_PROPS = [
+  "boxSizing", "width", "height", "overflowX", "overflowY",
+  "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth", "borderStyle",
+  "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+  "fontStyle", "fontVariant", "fontWeight", "fontStretch", "fontSize", "fontFamily",
+  "lineHeight", "textAlign", "textTransform", "textIndent", "textDecoration",
+  "letterSpacing", "wordSpacing", "tabSize", "whiteSpace", "wordWrap", "wordBreak",
+];
+
+let caretMirrorEl = null;
+
+function getCaretCoordinates(textarea, index) {
+  if (!caretMirrorEl) {
+    caretMirrorEl = document.createElement("div");
+    caretMirrorEl.style.position = "absolute";
+    caretMirrorEl.style.visibility = "hidden";
+    caretMirrorEl.style.top = "0";
+    caretMirrorEl.style.left = "-9999px";
+    caretMirrorEl.style.whiteSpace = "pre-wrap";
+    caretMirrorEl.style.wordWrap = "break-word";
+    document.body.appendChild(caretMirrorEl);
+  }
+  const computed = window.getComputedStyle(textarea);
+  CARET_MIRROR_PROPS.forEach((prop) => (caretMirrorEl.style[prop] = computed[prop]));
+
+  caretMirrorEl.textContent = textarea.value.slice(0, index);
+  const marker = document.createElement("span");
+  marker.textContent = textarea.value.slice(index) || ".";
+  caretMirrorEl.appendChild(marker);
+
+  const coords = {
+    top: marker.offsetTop,
+    left: marker.offsetLeft,
+    height: parseInt(computed.lineHeight, 10) || Math.round(parseFloat(computed.fontSize) * 1.2),
+  };
+
+  caretMirrorEl.innerHTML = "";
+  return coords;
+}
+
+function positionMentionDropdown(textarea, dropdownEl, charIndex) {
+  const coords = getCaretCoordinates(textarea, charIndex);
+  const top = coords.top + coords.height - textarea.scrollTop;
+  const left = coords.left - textarea.scrollLeft;
+  dropdownEl.style.top = `${top}px`;
+  dropdownEl.style.left = `${left}px`;
+  // clamp after the browser lays it out, once we know its actual rendered width
+  requestAnimationFrame(() => {
+    const maxLeft = Math.max(0, textarea.clientWidth - dropdownEl.offsetWidth);
+    if (left > maxLeft) dropdownEl.style.left = `${maxLeft}px`;
+  });
+}
+
+function attachMentionAutocomplete(textarea, dropdownEl) {
+  let results = [];
+  let activeIndex = 0;
+  let tokenStart = null;
+
+  function close() {
+    dropdownEl.hidden = true;
+    dropdownEl.innerHTML = "";
+    results = [];
+    tokenStart = null;
+  }
+
+  function render() {
+    if (!results.length) {
+      close();
+      return;
+    }
+    dropdownEl.innerHTML = results
+      .map(
+        (r, i) => `
+      <button type="button" class="mention-option${i === activeIndex ? " active" : ""}" data-index="${i}">
+        ${avatarMarkup(r.displayName, r.color, r.photoURL)}
+        <span class="mention-handle">@${escapeHtml(r.handle)}</span>
+        <span class="mention-name">${escapeHtml(r.displayName)}</span>
+      </button>`
+      )
+      .join("");
+    dropdownEl.hidden = false;
+  }
+
+  function openWithQuery(query) {
+    results = getMentionables()
+      .filter((m) => m.handle.startsWith(query.toLowerCase()))
+      .slice(0, 5);
+    activeIndex = 0;
+    render();
+  }
+
+  function selectResult(i) {
+    const r = results[i];
+    if (!r || tokenStart === null) return;
+    const caret = textarea.selectionStart;
+    const before = textarea.value.slice(0, tokenStart);
+    const after = textarea.value.slice(caret);
+    const inserted = `@${r.handle} `;
+    textarea.value = before + inserted + after;
+    const newCaret = before.length + inserted.length;
+    textarea.setSelectionRange(newCaret, newCaret);
+    textarea.dispatchEvent(new Event("input", { bubbles: true })); // keeps char-count etc in sync
+    close();
+    textarea.focus();
+  }
+
+  textarea.addEventListener("input", () => {
+    const match = getActiveMentionQuery(textarea);
+    if (!match) {
+      close();
+      return;
+    }
+    if (match.start !== tokenStart) {
+      positionMentionDropdown(textarea, dropdownEl, match.start);
+    }
+    tokenStart = match.start;
+    openWithQuery(match.query);
+  });
+
+  textarea.addEventListener("keydown", (e) => {
+    if (dropdownEl.hidden || !results.length) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      activeIndex = (activeIndex + 1) % results.length;
+      render();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeIndex = (activeIndex - 1 + results.length) % results.length;
+      render();
+    } else if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      selectResult(activeIndex);
+    } else if (e.key === "Escape") {
+      close();
+    }
+  });
+
+  // mousedown (not click) so this fires before the textarea's blur closes the dropdown
+  dropdownEl.addEventListener("mousedown", (e) => {
+    const btn = e.target.closest("[data-index]");
+    if (!btn) return;
+    e.preventDefault();
+    selectResult(Number(btn.dataset.index));
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!dropdownEl.hidden && !e.target.closest(".mention-anchor")) close();
+  });
+}
+
+// ============================================================
 // Feed — one flat stream, threaded replies rendered inline
 // ============================================================
 
@@ -457,7 +643,10 @@ function toggleInlineReply(slot, post) {
   const wrap = document.createElement("div");
   wrap.className = "inline-reply";
   wrap.innerHTML = `
-    <textarea rows="2" maxlength="${MAX_POST_LENGTH}" placeholder="Reply to ${escapeHtml(post.authorName)}…"></textarea>
+    <div class="mention-anchor">
+      <textarea rows="2" maxlength="${MAX_POST_LENGTH}" placeholder="Reply to ${escapeHtml(post.authorName)}…"></textarea>
+      <div class="mention-dropdown" hidden></div>
+    </div>
     <div class="inline-reply-row">
       <button class="btn-text" data-action="cancel">Cancel</button>
       <button class="btn btn-primary" data-action="send">Reply</button>
@@ -466,6 +655,7 @@ function toggleInlineReply(slot, post) {
   `;
   const textarea = wrap.querySelector("textarea");
   const note = wrap.querySelector("[data-note]");
+  attachMentionAutocomplete(textarea, wrap.querySelector(".mention-dropdown"));
   wrap.querySelector('[data-action="cancel"]').onclick = () => (slot.innerHTML = "");
   wrap.querySelector('[data-action="send"]').onclick = async () => {
     const text = textarea.value.trim();
@@ -523,6 +713,7 @@ function escapeHtml(str) {
 postText.addEventListener("input", () => {
   charCount.textContent = `${postText.value.length} / ${MAX_POST_LENGTH}`;
 });
+attachMentionAutocomplete(postText, document.getElementById("postTextMentions"));
 
 function validatePost(text) {
   if (!text.trim()) return "Write something first.";
