@@ -51,6 +51,7 @@ const MAX_CHARACTER_REPLIES_PER_POST = 2;
 const MAX_TOP_LEVEL_POSTS = 50;
 const IDENTITY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const HANDLE_PATTERN = /^[a-z0-9_]{2,20}$/;
+const BIO_MAX_LENGTH = 160; // unlike name/handle, bio has no cooldown — edit as often as you like
 
 // ============================================================
 // Firebase setup
@@ -244,6 +245,7 @@ async function ensureUserDoc(user) {
       displayName: user.displayName || "Anonymous",
       handle: slugifyHandle(user.displayName, user.uid),
       photoURL: user.photoURL || null,
+      bio: "",
       createdAt: serverTimestamp(),
       lastNameChangeAt: serverTimestamp(),
     });
@@ -801,7 +803,10 @@ function renderProfileFor(handle) {
         <div class="profile-handle">@${escapeHtml(entry.handle)}</div>
       </div>
     </div>
-    ${character ? `<p class="profile-bio">${escapeHtml(character.persona)}</p>` : ""}
+    ${(() => {
+      const bioText = isCharacter ? character.persona : (userDoc && userDoc.bio ? userDoc.bio : "");
+      return bioText ? `<p class="profile-bio">${escapeHtml(bioText)}</p>` : "";
+    })()}
     <p class="profile-meta">${isCharacter ? "A resident of Backlot" : `Joined ${formatDate(userDoc && userDoc.createdAt)}`}</p>
     <div class="profile-actions" data-actions></div>
   `;
@@ -872,11 +877,16 @@ function openEditModal(userDoc) {
       <p class="modal-hint">Lowercase letters, numbers, underscores only. 2–20 characters.</p>
 
       ${status.allowed ? "" : `<p class="modal-hint">You can change these again in ${status.daysLeft} day${status.daysLeft === 1 ? "" : "s"}.</p>`}
+
+      <label for="editBio">Bio</label>
+      <textarea id="editBio" maxlength="${BIO_MAX_LENGTH}" rows="3">${escapeHtml(userDoc?.bio || "")}</textarea>
+      <p class="modal-hint">${BIO_MAX_LENGTH} characters, edit as often as you like — no cooldown on this one.</p>
+
       <p class="modal-error" data-error></p>
 
       <div class="modal-row">
         <button class="btn-text" data-action="cancel">Cancel</button>
-        <button class="btn btn-primary" data-action="save" ${status.allowed ? "" : "disabled"}>Save</button>
+        <button class="btn btn-primary" data-action="save">Save</button>
       </div>
     </div>
   `;
@@ -889,27 +899,48 @@ function openEditModal(userDoc) {
   overlay.querySelector('[data-action="save"]').onclick = async () => {
     const nameInput = overlay.querySelector("#editName");
     const handleInput = overlay.querySelector("#editHandle");
+    const bioInput = overlay.querySelector("#editBio");
     const errorEl = overlay.querySelector("[data-error]");
-    const displayName = nameInput.value.trim();
-    const handle = handleInput.value.trim().toLowerCase();
+    const bio = bioInput.value.trim();
 
-    if (!displayName) return (errorEl.textContent = "Display name can't be empty.");
-    if (!HANDLE_PATTERN.test(handle)) return (errorEl.textContent = "Handle must be 2–20 lowercase letters, numbers, or underscores.");
-    if (characters.some((c) => c.id.toLowerCase() === handle)) return (errorEl.textContent = "That handle belongs to a cast member.");
+    const payload = {};
+    if (bio !== (userDoc?.bio || "")) payload.bio = bio;
 
-    errorEl.textContent = "Checking availability…";
-    try {
-      const existing = await getDocs(query(collection(db, "users"), where("handle", "==", handle)));
-      const takenByOther = existing.docs.some((d) => d.id !== currentUser.uid);
-      if (takenByOther) return (errorEl.textContent = "That handle's taken.");
+    if (status.allowed) {
+      const displayName = nameInput.value.trim();
+      const handle = handleInput.value.trim().toLowerCase();
+      const identityChanged = displayName !== (userDoc?.displayName || "") || handle !== (userDoc?.handle || "");
 
-      await updateDoc(doc(db, "users", currentUser.uid), {
-        displayName,
-        handle,
-        lastNameChangeAt: serverTimestamp(),
-      });
+      if (identityChanged) {
+        if (!displayName) return (errorEl.textContent = "Display name can't be empty.");
+        if (!HANDLE_PATTERN.test(handle)) return (errorEl.textContent = "Handle must be 2–20 lowercase letters, numbers, or underscores.");
+        if (characters.some((c) => c.id.toLowerCase() === handle)) return (errorEl.textContent = "That handle belongs to a cast member.");
+
+        errorEl.textContent = "Checking availability…";
+        try {
+          const existing = await getDocs(query(collection(db, "users"), where("handle", "==", handle)));
+          const takenByOther = existing.docs.some((d) => d.id !== currentUser.uid);
+          if (takenByOther) return (errorEl.textContent = "That handle's taken.");
+        } catch (err) {
+          console.error(err);
+          return (errorEl.textContent = "Couldn't check that handle — try again.");
+        }
+        payload.displayName = displayName;
+        payload.handle = handle;
+        payload.lastNameChangeAt = serverTimestamp();
+      }
+    }
+
+    if (Object.keys(payload).length === 0) {
       close();
-      navigateToProfile(handle);
+      return;
+    }
+
+    errorEl.textContent = "";
+    try {
+      await updateDoc(doc(db, "users", currentUser.uid), payload);
+      close();
+      if (payload.handle) navigateToProfile(payload.handle);
     } catch (err) {
       console.error(err);
       errorEl.textContent = "Couldn't save — try again.";

@@ -391,7 +391,8 @@ img.avatar {
 }
 .modal h3 { font-family: var(--font-display); margin: 0 0 16px; font-size: 1.1rem; }
 .modal label { display: block; font-size: 0.82rem; color: var(--muted); margin: 14px 0 6px; }
-.modal input[type="text"] {
+.modal input[type="text"],
+.modal textarea {
   width: 100%;
   background: var(--panel-raised);
   border: 1px solid var(--line);
@@ -402,7 +403,8 @@ img.avatar {
   padding: 10px 12px;
   outline: none;
 }
-.modal input[type="text"]:focus { border-color: var(--accent); }
+.modal textarea { resize: vertical; min-height: 60px; }
+.modal input[type="text"]:focus, .modal textarea:focus { border-color: var(--accent); }
 .modal-hint { font-size: 0.76rem; color: var(--muted); margin-top: 4px; }
 .modal-error { font-size: 0.8rem; color: var(--live); min-height: 1.2em; margin-top: 10px; }
 .modal-row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
